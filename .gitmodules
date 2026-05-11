@@ -1,0 +1,3 @@
+[submodule "hashfuncs"]
+	path = libs/hashfuncs
+	url = git@github.com:sar-05/hashfuncs.git
