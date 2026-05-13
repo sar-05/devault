@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include "spawn.h"
 
 /* Opens path thorugh the system editor (defaults to vi). */
