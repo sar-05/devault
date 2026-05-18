@@ -37,6 +37,8 @@ typedef struct _dv_ctx dv_ctx_t;
 
 dv_ctx_t *create_dv_ctx(void);
 
+void destroy_dv_ctx(dv_ctx_t *ctx);
+
 void dv_print_error(dv_ctx_t *ctx, input_type type);
 
 #endif

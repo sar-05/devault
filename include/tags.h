@@ -28,4 +28,13 @@ int tg_save(dv_ctx_t *ctx, const char *path);
 
 int tg_load(dv_ctx_t *ctx, const char *path);
 
+uint16_t tg_get_tag_id_by_name(dv_ctx_t *ctx, const char *name);
+
+const char *tg_get_tag_name_by_id(dv_ctx_t *ctx, uint16_t id);
+
+uint16_t *tg_filter_records_by_id(dv_ctx_t *ctx,
+				  const char **names,
+				  uint16_t len,
+				  uint16_t *record_count);
+
 #endif

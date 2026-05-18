@@ -1,6 +1,53 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
 #include "devaultInt.h"
 #include "devault.h"
+#include "records.h"
+#include "tagmatrix.h"
+#include "tags.h"
+
+dv_ctx_t *create_dv_ctx(void)
+{
+	dv_ctx_t *ctx = malloc(sizeof(struct _dv_ctx));
+	if (!ctx)
+		return NULL;
+
+	ctx->tag_mat = NULL;
+	ctx->tag_list = NULL;
+	ctx->record_list = NULL;
+
+	if (tm_create(ctx, MAX_RECORDS, MAX_TAGS) != 0) {
+		free(ctx);
+		return NULL;
+	}
+
+	if (!rd_create_record_list(ctx, MAX_RECORDS)) {
+		tm_free(ctx);
+		free(ctx);
+		return NULL;
+	}
+
+	if (!tg_create_tag_table(ctx, MAX_TAGS)) {
+		rd_destroy_record_list(ctx);
+		tm_free(ctx);
+		free(ctx);
+		return NULL;
+	}
+
+	ctx->error_status = ERR_NONE;
+	return ctx;
+}
+
+void destroy_dv_ctx(dv_ctx_t *ctx)
+{
+	if (!ctx)
+		return;
+	tg_destroy_tag_table(ctx);
+	rd_destroy_record_list(ctx);
+	tm_free(ctx);
+	free(ctx);
+}
 
 void dv_print_error(dv_ctx_t *ctx, input_type type)
 {

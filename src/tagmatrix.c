@@ -15,26 +15,6 @@
 
 #define MIN_ROW_STRIDE 2
 
-typedef struct _tag_matrix_header {
-	uint32_t magic;
-	uint16_t m_capacity;
-	uint16_t n_capacity;
-	uint16_t m_used;
-	uint16_t n_used;
-	uint16_t fl_head;
-	uint8_t version;
-	uint8_t fl_tag_count;
-} TagMatrixHeader;
-
-struct _tagmatrix {
-	TagMatrixHeader hdr;
-	uint8_t _padding[16];
-
-	uint8_t fl_tag_ids[MAX_TAGS];
-	uint8_t *data;
-	int row_stride;
-};
-
 static int _tm_has_tag(const TagMatrix *tm, int R, int T)
 {
 	return (tm->data[R * tm->row_stride + T / 8] >> (T % 8)) & 1;
@@ -48,6 +28,21 @@ static void _tm_set_tag(TagMatrix *tm, int R, int T)
 static void _tm_clear_tag(TagMatrix *tm, int R, int T)
 {
 	tm->data[R * tm->row_stride + T / 8] &= (uint8_t)~(1u << (T % 8));
+}
+
+int tm_has_tag(dv_ctx_t *ctx, uint16_t record_id, uint16_t tag_id)
+{
+	return _tm_has_tag(ctx->tag_mat, record_id, tag_id);
+}
+
+void tm_set_tag(dv_ctx_t *ctx, uint16_t record_id, uint16_t tag_id)
+{
+	_tm_set_tag(ctx->tag_mat, record_id, tag_id);
+}
+
+void tm_clear_tag(dv_ctx_t *ctx, uint16_t record_id, uint16_t tag_id)
+{
+	_tm_clear_tag(ctx->tag_mat, record_id, tag_id);
 }
 
 int tm_create(dv_ctx_t *ctx, uint16_t m_capacity, uint16_t n_capacity)
@@ -74,22 +69,22 @@ int tm_create(dv_ctx_t *ctx, uint16_t m_capacity, uint16_t n_capacity)
 		return -1;
 	}
 
-	ctx->tg = tm;
+	ctx->tag_mat = tm;
 	return 0;
 }
 
 void tm_free(dv_ctx_t *ctx)
 {
-	if (ctx->tg) {
-		free(ctx->tg->data);
-		free(ctx->tg);
-		ctx->tg = NULL;
+	if (ctx->tag_mat) {
+		free(ctx->tag_mat->data);
+		free(ctx->tag_mat);
+		ctx->tag_mat = NULL;
 	}
 }
 
 int tm_save(dv_ctx_t *ctx, const char *path)
 {
-	const TagMatrix *tm = ctx->tg;
+	const TagMatrix *tm = ctx->tag_mat;
 	FILE *f = fopen(path, "wb");
 	if (!f)
 		return -1;
@@ -141,7 +136,7 @@ int tm_load(dv_ctx_t *ctx, const char *path)
 
 	fread(tm->data, 1, bitmap_bytes, f);
 	fclose(f);
-	ctx->tg = tm;
+	ctx->tag_mat = tm;
 	return 0;
 }
 
@@ -207,7 +202,7 @@ static void _fl_set_next(TagMatrix *tm, int R, uint16_t next)
 
 void tm_delete_record(dv_ctx_t *ctx, int R)
 {
-	TagMatrix *tm = ctx->tg;
+	TagMatrix *tm = ctx->tag_mat;
 	memset(tm->data + (size_t)R * tm->row_stride, 0, tm->row_stride);
 	_fl_set_next(tm, R, tm->hdr.fl_head);
 	tm->hdr.fl_head = (uint16_t)R;
@@ -215,7 +210,7 @@ void tm_delete_record(dv_ctx_t *ctx, int R)
 
 int tm_alloc_record(dv_ctx_t *ctx)
 {
-	TagMatrix *tm = ctx->tg;
+	TagMatrix *tm = ctx->tag_mat;
 	if (tm->hdr.fl_head != FL_NONE) {
 		int R = tm->hdr.fl_head;
 		tm->hdr.fl_head = _fl_get_next(tm, R);
@@ -239,7 +234,7 @@ int tm_alloc_record(dv_ctx_t *ctx)
 
 void tm_delete_tag(dv_ctx_t *ctx, int T)
 {
-	TagMatrix *tm = ctx->tg;
+	TagMatrix *tm = ctx->tag_mat;
 	for (int r = 0; r < tm->hdr.m_used; r++)
 		_tm_clear_tag(tm, r, T);
 
@@ -248,7 +243,7 @@ void tm_delete_tag(dv_ctx_t *ctx, int T)
 
 int tm_alloc_tag(dv_ctx_t *ctx)
 {
-	TagMatrix *tm = ctx->tg;
+	TagMatrix *tm = ctx->tag_mat;
 	if (tm->hdr.fl_tag_count > 0)
 		return tm->fl_tag_ids[--tm->hdr.fl_tag_count];
 
@@ -265,26 +260,31 @@ int tm_alloc_tag(dv_ctx_t *ctx)
 	return tm->hdr.n_used++;
 }
 
-int *tm_query(dv_ctx_t *ctx, const int *tag_ids, int n_tag_ids, int *out_count)
+uint16_t *tm_query(dv_ctx_t *ctx,
+		   const uint16_t *tag_ids,
+		   uint16_t n_tag_ids,
+		   uint16_t *out_count)
 {
-	const TagMatrix *tm = ctx->tg;
+	const TagMatrix *tm = ctx->tag_mat;
 	uint8_t *query = calloc(1, tm->row_stride);
 	if (!query) {
 		*out_count = 0;
 		return NULL;
 	}
-	for (int i = 0; i < n_tag_ids; i++)
+	for (uint16_t i = 0; i < n_tag_ids; i++)
 		query[tag_ids[i] / 8] |= (1u << (tag_ids[i] % 8));
 
-	int *results = malloc((size_t)tm->hdr.m_used * sizeof(int));
-	int count = 0;
+	uint16_t *results = malloc((size_t)tm->hdr.m_used * sizeof(uint16_t));
+	uint16_t count = 0;
 
-	for (int r = 0; r < tm->hdr.m_used; r++) {
-		uint8_t *row = tm->data + (size_t)r * tm->row_stride;
-		int match = 1;
-		for (int b = 0; b < tm->row_stride; b++) {
+	uint16_t r;
+	for (r = 0; r < tm->hdr.m_used; r++) {
+		uint8_t *row = tm->data + r * tm->row_stride;
+		bool match = true;
+		int b;
+		for (b = 0; b < tm->row_stride; b++) {
 			if ((row[b] & query[b]) != query[b]) {
-				match = 0;
+				match = false;
 				break;
 			}
 		}
@@ -299,7 +299,7 @@ int *tm_query(dv_ctx_t *ctx, const int *tag_ids, int n_tag_ids, int *out_count)
 
 void tm_print(dv_ctx_t *ctx)
 {
-	const TagMatrix *tm = ctx->tg;
+	const TagMatrix *tm = ctx->tag_mat;
 	printf("TagMatrix: records=%d/%d  tags=%d/%d  row_stride=%d bytes\n",
 	       tm->hdr.m_used,
 	       tm->hdr.m_capacity,
