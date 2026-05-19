@@ -33,4 +33,16 @@ const struct record *rd_get_record_by_id(dv_ctx_t *ctx, uint16_t id);
 
 uint16_t rd_get_record_id_by_name(dv_ctx_t *ctx, const char *name);
 
+uint16_t *rd_search_records_by_name(dv_ctx_t *ctx,
+				    const char *pattern,
+				    uint16_t *out_count);
+
+uint16_t *rd_search_records_in_set(dv_ctx_t *ctx,
+				   const char *pattern,
+				   const uint16_t *ids,
+				   uint16_t ids_count,
+				   uint16_t *out_count);
+
+bool rd_record_has_tags(dv_ctx_t *ctx, uint16_t record_id);
+
 #endif

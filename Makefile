@@ -18,8 +18,8 @@ RELEASE_LIBS := $(addprefix build/release/libs/lib, $(addsuffix .a, $(LIB_NAMES)
 
 DEBUG_LDFLAGS   := -Lbuild/debug/libs   $(addprefix -l, $(LIB_NAMES))
 RELEASE_LDFLAGS := -Lbuild/release/libs $(addprefix -l, $(LIB_NAMES))
-DEBUG_LDFLAGS += -lcurl
-RELEASE_LDFLAGS += -lcurl
+DEBUG_LDFLAGS += -lcurl -lreadline
+RELEASE_LDFLAGS += -lcurl -lreadline
 
 
 .PHONY: all debug release clean help

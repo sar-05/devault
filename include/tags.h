@@ -22,7 +22,7 @@ bool tg_create_tag(dv_ctx_t *ctx, const char *name);
 
 bool tg_delete_tag(dv_ctx_t *ctx, const char *name);
 
-void tg_print_tags(dv_ctx_t ctx);
+bool tg_print_tags(dv_ctx_t *ctx);
 
 int tg_save(dv_ctx_t *ctx, const char *path);
 

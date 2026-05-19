@@ -4,8 +4,10 @@
 #include <string.h>
 #include <regex.h>
 #include <curl/curl.h>
+#include <readline/readline.h>
 #include "validate.h"
 #include "devaultInt.h"
+#include "display.h"
 
 static const char *RESERVED_NAMES[] = {
     "CON", "PRN", "AUX", "NUL", ".", "..", NULL};
@@ -296,4 +298,50 @@ int read_menu_opt(dv_ctx_t *ctx, int min, int max)
 	} while (!valid);
 
 	return result;
+}
+
+char *read_input(const char *prompt)
+{
+	return readline(prompt);
+}
+
+void read_regex(dv_ctx_t *ctx, char *buffer, size_t max_len)
+{
+	bool valid;
+
+	do {
+		printf("Enter regex pattern: ");
+		if (fgets(buffer, (int)max_len, stdin) == NULL) {
+			buffer[0] = '\0';
+		} else if (strchr(buffer, '\n') == NULL) {
+			int c;
+			while ((c = getchar()) != '\n' && c != EOF)
+				;
+		}
+		_trim_newline(buffer);
+
+		if (buffer[0] == '\0') {
+			ctx->error_status = ERR_EMPTY_INPUT;
+			dv_print_error(ctx, TYPE_APP);
+			valid = false;
+			continue;
+		}
+
+		regex_t re;
+		int rc = regcomp(&re, buffer, REG_EXTENDED | REG_NOSUB);
+		if (rc == 0) {
+			regfree(&re);
+			valid = true;
+		} else {
+			char errbuf[256];
+			regerror(rc, &re, errbuf, sizeof(errbuf));
+			regfree(&re);
+
+			display_separator(stderr);
+			fprintf(stderr, "[!] invalid regex: %s\n", errbuf);
+			display_separator(stderr);
+
+			valid = false;
+		}
+	} while (!valid);
 }

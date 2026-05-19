@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <regex.h>
 #include "records.h"
 #include "hashfuncs.h"
 #include "tagmatrix.h"
@@ -200,4 +201,79 @@ uint16_t rd_get_record_id_by_name(dv_ctx_t *ctx, const char *name)
 			return ctx->record_list->data[i].id;
 	}
 	return UINT16_MAX;
+}
+
+uint16_t *rd_search_records_by_name(dv_ctx_t *ctx,
+				    const char *pattern,
+				    uint16_t *out_count)
+{
+	regex_t re;
+	if (regcomp(&re, pattern, REG_EXTENDED | REG_NOSUB) != 0) {
+		*out_count = 0;
+		return NULL;
+	}
+
+	uint16_t *results = malloc(sizeof(uint16_t) * ctx->record_list->hdr.used);
+	if (!results) {
+		regfree(&re);
+		*out_count = 0;
+		return NULL;
+	}
+
+	uint16_t count = 0;
+	for (uint16_t i = 0; i < ctx->record_list->hdr.used; i++) {
+		if (regexec(&re, ctx->record_list->data[i].name, 0, NULL, 0) == 0)
+			results[count++] = ctx->record_list->data[i].id;
+	}
+
+	regfree(&re);
+	*out_count = count;
+	return results;
+}
+
+uint16_t *rd_search_records_in_set(dv_ctx_t *ctx,
+				   const char *pattern,
+				   const uint16_t *ids,
+				   uint16_t ids_count,
+				   uint16_t *out_count)
+{
+	regex_t re;
+	if (regcomp(&re, pattern, REG_EXTENDED | REG_NOSUB) != 0) {
+		*out_count = 0;
+		return NULL;
+	}
+
+	bool wanted[MAX_RECORDS] = {false};
+	for (uint16_t i = 0; i < ids_count; i++)
+		if (ids[i] < MAX_RECORDS)
+			wanted[ids[i]] = true;
+
+	uint16_t *results = malloc(sizeof(uint16_t) * ctx->record_list->hdr.used);
+	if (!results) {
+		regfree(&re);
+		*out_count = 0;
+		return NULL;
+	}
+
+	uint16_t count = 0;
+	for (uint16_t i = 0; i < ctx->record_list->hdr.used; i++) {
+		uint16_t rid = ctx->record_list->data[i].id;
+		if (rid < MAX_RECORDS && wanted[rid] &&
+		    regexec(&re, ctx->record_list->data[i].name, 0, NULL, 0) == 0)
+			results[count++] = rid;
+	}
+
+	regfree(&re);
+	*out_count = count;
+	return results;
+}
+
+bool rd_record_has_tags(dv_ctx_t *ctx, uint16_t record_id)
+{
+	TagList *tl = ctx->tag_list;
+	for (uint16_t i = 0; i < tl->hdr.used; i++) {
+		if (tm_has_tag(ctx, record_id, tl->data[i].id))
+			return true;
+	}
+	return false;
 }

@@ -159,13 +159,20 @@ int tg_load(dv_ctx_t *ctx, const char *path)
 	return 0;
 }
 
-void tg_print_tags(dv_ctx_t ctx)
+bool tg_print_tags(dv_ctx_t *ctx)
 {
-	for (uint16_t i = 0; i < ctx.tag_list->hdr.used; i++) {
-		printf("id=%u  name=%s\n",
-		       ctx.tag_list->data[i].id,
-		       ctx.tag_list->data[i].name);
+	if (ctx->tag_list->hdr.used == 0) {
+		ctx->error_status = ERR_EMPTY_TAG_LIST;
+		return false;
 	}
+
+	for (uint16_t i = 0; i < ctx->tag_list->hdr.used; i++) {
+		printf("id=%u  name=%s\n",
+		       ctx->tag_list->data[i].id,
+		       ctx->tag_list->data[i].name);
+	}
+	ctx->error_status = ERR_NONE;
+	return true;
 }
 
 const char *tg_get_tag_name_by_id(dv_ctx_t *ctx, uint16_t id)

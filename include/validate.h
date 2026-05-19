@@ -32,4 +32,8 @@ void read_alphanum_name(dv_ctx_t *ctx, char *buffer, size_t max_len);
 
 int read_menu_opt(dv_ctx_t *ctx, int min, int max);
 
+void read_regex(dv_ctx_t *ctx, char *buffer, size_t max_len);
+
+char *read_input(const char *prompt);
+
 #endif

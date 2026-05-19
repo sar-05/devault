@@ -6,6 +6,7 @@
 #include "records.h"
 #include "tagmatrix.h"
 #include "tags.h"
+#include "display.h"
 
 dv_ctx_t *create_dv_ctx(void)
 {
@@ -51,34 +52,34 @@ void destroy_dv_ctx(dv_ctx_t *ctx)
 
 void dv_print_error(dv_ctx_t *ctx, input_type type)
 {
-	const char *t;
+	display_separator(stderr);
 
-	switch (type) {
-	case TYPE_URL:
-		t = "URL";
-		break;
-	case TYPE_PATH:
-		t = "path";
-		break;
-	case TYPE_NAME:
-		t = "file name";
-		break;
-	case TYPE_OPTION:
-		t = "menu option";
-		break;
-	case TYPE_ALPHANAME:
-		t = "name";
-		break;
-	default:
-		t = "input";
-		break;
+	if (type != TYPE_APP) {
+		const char *t;
+		switch (type) {
+		case TYPE_URL:
+			t = "URL";
+			break;
+		case TYPE_PATH:
+			t = "path";
+			break;
+		case TYPE_NAME:
+			t = "file name";
+			break;
+		case TYPE_OPTION:
+			t = "menu option";
+			break;
+		case TYPE_ALPHANAME:
+			t = "name";
+			break;
+		default:
+			t = "input";
+			break;
+		}
+		fprintf(stderr, "[!] Invalid %s — ", t);
+	} else {
+		fprintf(stderr, "[!] ");
 	}
-
-	for (int i = 0; i < SEPARATOR_LEN; i++)
-		fputc('-', stderr);
-	fputc('\n', stderr);
-
-	fprintf(stderr, "[!] Invalid %s — ", t);
 
 	switch (ctx->error_status) {
 	case ERR_EMPTY_INPUT:
@@ -117,12 +118,40 @@ void dv_print_error(dv_ctx_t *ctx, input_type type)
 	case ERR_MALFORMED_URL:
 		fprintf(stderr, "malformed url\n");
 		break;
+	case ERR_RECORD_NOT_FOUND:
+		fprintf(stderr, "record not found.\n");
+		break;
+	case ERR_TAG_NOT_FOUND:
+		fprintf(stderr, "tag not found.\n");
+		break;
+	case ERR_TAG_ID_NOT_FOUND:
+		fprintf(stderr, "tag ID not found.\n");
+		break;
+	case ERR_RECORD_CREATE_FAILED:
+		fprintf(stderr, "failed to create record.\n");
+		break;
+	case ERR_TAG_CREATE_FAILED:
+		fprintf(stderr, "failed to create tag.\n");
+		break;
+	case ERR_EMPTY_TAG_LIST:
+		fprintf(stderr, "empty tag list.\n");
+		break;
+	case ERR_EMPTY_RECORD_LIST:
+		fprintf(stderr, "empty record list.\n");
+		break;
+	case ERR_RECORD_SEARCH_NO_MATCH:
+		fprintf(stderr, "no records match the search.\n");
+		break;
+	case ERR_NO_TAGS_IN_RECORD:
+		fprintf(stderr, "record doesn't have any tags.\n");
+		break;
+	case ERR_INTERNAL:
+		fprintf(stderr, "internal error.\n");
+		break;
 	default:
-		fprintf(stderr, "unknown validation error.\n");
+		fprintf(stderr, "unknown error.\n");
 		break;
 	}
 
-	for (int i = 0; i < SEPARATOR_LEN; i++)
-		fputc('-', stderr);
-	fputc('\n', stderr);
+	display_separator(stderr);
 }
