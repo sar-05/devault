@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "devault.h"
 
 struct record {
@@ -21,13 +22,13 @@ void rd_destroy_record_list(dv_ctx_t *ctx);
 
 bool rd_create_record(dv_ctx_t *ctx, const char *name, const char *link);
 
-bool rd_delete_record(dv_ctx_t *ctx, const char *name);
+bool rd_delete_record_by_id(dv_ctx_t *ctx, uint16_t id);
 
 void rd_print_records(dv_ctx_t ctx);
 
-int rd_save(dv_ctx_t *ctx, const char *path);
+int rd_write(dv_ctx_t *ctx, FILE *f);
 
-int rd_load(dv_ctx_t *ctx, const char *path);
+int rd_read(dv_ctx_t *ctx, FILE *f);
 
 const struct record *rd_get_record_by_id(dv_ctx_t *ctx, uint16_t id);
 
@@ -44,5 +45,7 @@ uint16_t *rd_search_records_in_set(dv_ctx_t *ctx,
 				   uint16_t *out_count);
 
 bool rd_record_has_tags(dv_ctx_t *ctx, uint16_t record_id);
+
+bool rd_is_record_list_empty(dv_ctx_t *ctx);
 
 #endif

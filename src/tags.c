@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,9 +8,6 @@
 #include "hashfuncs.h"
 #include "tagmatrix.h"
 #include "devaultInt.h"
-
-#define TG_MAGIC 0x54414753u
-#define TG_VERSION 1
 
 bool tg_create_tag_table(dv_ctx_t *ctx, uint16_t capacity)
 {
@@ -24,7 +22,6 @@ bool tg_create_tag_table(dv_ctx_t *ctx, uint16_t capacity)
 		return false;
 	}
 
-	ctx->tag_list->hdr.magic = TG_MAGIC;
 	ctx->tag_list->hdr.used = 0;
 	ctx->tag_list->hdr.capacity = capacity;
 	return true;
@@ -47,13 +44,18 @@ bool tg_create_tag(dv_ctx_t *ctx, const char *name)
 			new_cap = 4;
 		if (new_cap > MAX_TAGS)
 			new_cap = MAX_TAGS;
-		if (ctx->tag_list->hdr.used >= new_cap)
+		if (ctx->tag_list->hdr.used >= new_cap) {
+			ctx->error_status = ERR_TAG_CREATE_FAILED;
 			return false;
+		}
 
 		struct tag *tmp =
 		    realloc(ctx->tag_list->data, sizeof(struct tag) * new_cap);
-		if (!tmp)
+		if (!tmp) {
+			ctx->error_status = ERR_INTERNAL;
+			ctx->error_msg = strerror(errno);
 			return false;
+		}
 		ctx->tag_list->data = tmp;
 		ctx->tag_list->hdr.capacity = new_cap;
 	}
@@ -95,67 +97,35 @@ bool tg_delete_tag(dv_ctx_t *ctx, const char *name)
 	return false;
 }
 
-int tg_save(dv_ctx_t *ctx, const char *path)
+int tg_write(dv_ctx_t *ctx, FILE *f)
 {
-	FILE *f = fopen(path, "wb");
-	if (!f)
-		return -1;
-
-	uint32_t magic = TG_MAGIC;
-	uint8_t version = TG_VERSION;
-	fwrite(&magic, sizeof(magic), 1, f);
-	fwrite(&version, sizeof(version), 1, f);
-	fwrite(&ctx->tag_list->hdr.capacity,
-	       sizeof(ctx->tag_list->hdr.capacity),
-	       1,
-	       f);
-	fwrite(&ctx->tag_list->hdr.used, sizeof(ctx->tag_list->hdr.used), 1, f);
-
+	fwrite(&ctx->tag_list->hdr, sizeof(ctx->tag_list->hdr), 1, f);
 	fwrite(ctx->tag_list->data,
 	       sizeof(struct tag),
 	       ctx->tag_list->hdr.used,
 	       f);
-
-	fclose(f);
 	return 0;
 }
 
-int tg_load(dv_ctx_t *ctx, const char *path)
+int tg_read(dv_ctx_t *ctx, FILE *f)
 {
-	FILE *f = fopen(path, "rb");
-	if (!f)
+	TagListHeader hdr;
+	if (fread(&hdr, sizeof(hdr), 1, f) != 1)
 		return -1;
 
-	uint32_t magic;
-	uint8_t version;
-	fread(&magic, sizeof(magic), 1, f);
-	fread(&version, sizeof(version), 1, f);
+	struct tag *data = malloc(sizeof(struct tag) * hdr.capacity);
+	if (!data)
+		return -1;
 
-	if (magic != TG_MAGIC) {
-		fprintf(stderr, "tg_load: bad magic number\n");
-		fclose(f);
+	if (fread(data, sizeof(struct tag), hdr.used, f) != hdr.used) {
+		free(data);
 		return -1;
 	}
-
-	uint16_t capacity;
-	uint16_t used;
-	fread(&capacity, sizeof(capacity), 1, f);
-	fread(&used, sizeof(used), 1, f);
-
-	struct tag *data = malloc(sizeof(struct tag) * capacity);
-	if (!data) {
-		fclose(f);
-		return -1;
-	}
-
-	fread(data, sizeof(struct tag), used, f);
 
 	free(ctx->tag_list->data);
 	ctx->tag_list->data = data;
-	ctx->tag_list->hdr.capacity = capacity;
-	ctx->tag_list->hdr.used = used;
+	ctx->tag_list->hdr = hdr;
 
-	fclose(f);
 	return 0;
 }
 
@@ -197,40 +167,7 @@ uint16_t tg_get_tag_id_by_name(dv_ctx_t *ctx, const char *name)
 	return UINT16_MAX;
 }
 
-uint16_t *tg_filter_records_by_id(dv_ctx_t *ctx,
-				  const char **names,
-				  uint16_t len,
-				  uint16_t *record_count)
+bool tg_is_tag_list_empty(dv_ctx_t *ctx)
 {
-	if (len == 0) {
-		*record_count = 0;
-		return NULL;
-	}
-
-	uint16_t count = 0;
-	uint16_t *tag_ids = malloc(sizeof(uint16_t) * len);
-
-	if (!tag_ids) {
-		*record_count = 0;
-		return NULL;
-	}
-
-	for (uint16_t i = 0; i < len; i++) {
-		uint16_t id = tg_get_tag_id_by_name(ctx, names[i]);
-		if (id != UINT16_MAX)
-			tag_ids[count++] = id;
-	}
-
-	uint16_t out_count;
-	uint16_t *record_ids;
-	record_ids = tm_query(ctx, tag_ids, count, &out_count);
-	free(tag_ids);
-
-	if (out_count == 0) {
-		*record_count = 0;
-		return NULL;
-	}
-
-	*record_count = out_count;
-	return record_ids; /* caller must free() */
+	return ctx->tag_list->hdr.used == 0;
 }

@@ -1,8 +1,10 @@
 #ifndef VALIDATE_H
 #define VALIDATE_H
 
+#include <regex.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "devault.h"
 
 #define REGEX_PATH_TRAVERSAL "\\.\\./|/\\.\\."
@@ -10,30 +12,18 @@
 #define REGEX_FILENAME "^[a-zA-Z0-9][a-zA-Z0-9_.+-]*$"
 #define REGEX_MENU_OPTION "^[0-9]+$"
 #define REGEX_ALPHANUM_NAME "^[a-zA-Z][a-zA-Z0-9 _-]*$"
+#define REGEX_ID_LIST "^[0-9]+(\\s+[0-9]+)*$"
 
-bool is_valid_url(dv_ctx_t *ctx, const char *input);
+typedef enum { TYPE_URL, TYPE_PATH, TYPE_NAME, TYPE_ALPHANAME } InputType;
 
-size_t is_valid_path(dv_ctx_t *ctx, const char *input);
+bool read_bool_opt(dv_ctx_t *ctx, const char *prompt);
 
-bool is_valid_filename(dv_ctx_t *ctx, const char *input);
-
-bool is_valid_alphanum_name(dv_ctx_t *ctx, const char *input);
-
-bool is_valid_menu_opt(
-    dv_ctx_t *ctx, const char *input, int min, int max, int *result);
-
-void read_url(dv_ctx_t *ctx, char *buffer, size_t max_len);
-
-void read_path(dv_ctx_t *ctx, char *buffer, size_t max_len);
-
-void read_filename(dv_ctx_t *ctx, char *buffer, size_t max_len);
-
-void read_alphanum_name(dv_ctx_t *ctx, char *buffer, size_t max_len);
+void read_input(dv_ctx_t *ctx, char *out, size_t max_len, InputType type);
 
 int read_menu_opt(dv_ctx_t *ctx, int min, int max);
 
-void read_regex(dv_ctx_t *ctx, char *buffer, size_t max_len);
+void read_pattern(dv_ctx_t *ctx, char *out, size_t max_len);
 
-char *read_input(const char *prompt);
+uint16_t *read_id_list(dv_ctx_t *ctx, size_t *count, const char *prompt);
 
 #endif

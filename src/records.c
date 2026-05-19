@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,9 +8,6 @@
 #include "hashfuncs.h"
 #include "tagmatrix.h"
 #include "devaultInt.h"
-
-#define RD_MAGIC 0x52454353u
-#define RD_VERSION 1
 
 bool rd_create_record_list(dv_ctx_t *ctx, uint16_t capacity)
 {
@@ -25,7 +23,6 @@ bool rd_create_record_list(dv_ctx_t *ctx, uint16_t capacity)
 
 	ctx->record_list = rl;
 	ctx->record_list->data = d;
-	ctx->record_list->hdr.magic = RD_MAGIC;
 	ctx->record_list->hdr.used = 0;
 	ctx->record_list->hdr.capacity = capacity;
 	return true;
@@ -42,53 +39,88 @@ void rd_destroy_record_list(dv_ctx_t *ctx)
 
 bool rd_create_record(dv_ctx_t *ctx, const char *name, const char *link)
 {
+	if (rd_get_record_id_by_name(ctx, name) != UINT16_MAX) {
+		ctx->error_status = ERR_USED_RECORD_NAME;
+		return false;
+	}
+
 	if (ctx->record_list->hdr.used >= ctx->record_list->hdr.capacity) {
 		uint16_t new_cap = ctx->record_list->hdr.capacity * 2;
 		if (new_cap == 0)
 			new_cap = 4;
 		if (new_cap > MAX_RECORDS)
 			new_cap = MAX_RECORDS;
-		if (ctx->record_list->hdr.used >= new_cap)
+		if (ctx->record_list->hdr.used >= new_cap) {
+			ctx->error_status = ERR_RECORD_CREATE_FAILED;
 			return false;
+		}
 
 		struct record *tmp = realloc(ctx->record_list->data,
 					     sizeof(struct record) * new_cap);
-		if (!tmp)
+		if (!tmp) {
+			ctx->error_status = ERR_INTERNAL;
+			ctx->error_msg = strerror(errno);
 			return false;
+		}
 		ctx->record_list->data = tmp;
 		ctx->record_list->hdr.capacity = new_cap;
 	}
 
 	int rec_id = tm_alloc_record(ctx);
-	if (rec_id == -1)
+	if (rec_id == -1) {
+		ctx->error_status = ERR_RECORD_CREATE_FAILED;
 		return false;
+	}
 
-	strncpy(ctx->record_list->data[ctx->record_list->hdr.used].name,
-		name,
-		MAX_NAME_LEN - 1);
-	ctx->record_list->data[ctx->record_list->hdr.used]
-	    .name[MAX_NAME_LEN - 1] = '\0';
-	strncpy(ctx->record_list->data[ctx->record_list->hdr.used].link,
-		link,
-		MAX_URL_LEN - 1);
-	ctx->record_list->data[ctx->record_list->hdr.used]
-	    .link[MAX_URL_LEN - 1] = '\0';
-	ctx->record_list->data[ctx->record_list->hdr.used].id =
-	    (uint16_t)rec_id;
-	ctx->record_list->data[ctx->record_list->hdr.used].hash = fnv1a_64_str(
-	    ctx->record_list->data[ctx->record_list->hdr.used].name);
+	struct record *rec =
+	    &ctx->record_list->data[ctx->record_list->hdr.used];
+
+	strncpy(rec->name, name, MAX_NAME_LEN - 1);
+	rec->name[MAX_NAME_LEN - 1] = '\0';
+
+	strncpy(rec->link, link, MAX_URL_LEN - 1);
+	rec->link[MAX_URL_LEN - 1] = '\0';
+	rec->id = (uint16_t)rec_id;
+	rec->hash = fnv1a_64_str(rec->name);
+
+	char fpath[MAX_PATH_LEN + MAX_NAME_LEN + 2];
+	snprintf(fpath, sizeof(fpath), "%s/%s", ctx->save_path, rec->name);
+
+	FILE *check = fopen(fpath, "r");
+	if (check) {
+		fclose(check);
+		tm_delete_record(ctx, (uint16_t)rec_id);
+		ctx->error_status = ERR_FILE_EXISTS;
+		return false;
+	}
+
+	FILE *rec_file = fopen(fpath, "w");
+	if (!rec_file) {
+		tm_delete_record(ctx, (uint16_t)rec_id);
+		ctx->error_status = ERR_RECORD_CREATE_FAILED;
+		return false;
+	}
+	fclose(rec_file);
 
 	ctx->record_list->hdr.used++;
 
 	return true;
 }
 
-bool rd_delete_record(dv_ctx_t *ctx, const char *name)
+bool rd_delete_record_by_id(dv_ctx_t *ctx, uint16_t id)
 {
-	uint64_t hash = fnv1a_64_str(name);
 	for (uint16_t i = 0; i < ctx->record_list->hdr.used; i++) {
-		if (ctx->record_list->data[i].hash == hash) {
-			tm_delete_record(ctx, ctx->record_list->data[i].id);
+		if (ctx->record_list->data[i].id == id) {
+			tm_delete_record(ctx, id);
+
+			char fpath[MAX_PATH_LEN + MAX_NAME_LEN + 2];
+			snprintf(fpath,
+				 sizeof(fpath),
+				 "%s/%s",
+				 ctx->save_path,
+				 ctx->record_list->data[i].name);
+			remove(fpath);
+
 			if (i < ctx->record_list->hdr.used - 1) {
 				memmove(
 				    &ctx->record_list->data[i],
@@ -103,70 +135,35 @@ bool rd_delete_record(dv_ctx_t *ctx, const char *name)
 	return false;
 }
 
-int rd_save(dv_ctx_t *ctx, const char *path)
+int rd_write(dv_ctx_t *ctx, FILE *f)
 {
-	FILE *f = fopen(path, "wb");
-	if (!f)
-		return -1;
-
-	uint32_t magic = RD_MAGIC;
-	uint8_t version = RD_VERSION;
-	fwrite(&magic, sizeof(magic), 1, f);
-	fwrite(&version, sizeof(version), 1, f);
-	fwrite(&ctx->record_list->hdr.capacity,
-	       sizeof(ctx->record_list->hdr.capacity),
-	       1,
-	       f);
-	fwrite(&ctx->record_list->hdr.used,
-	       sizeof(ctx->record_list->hdr.used),
-	       1,
-	       f);
-
+	fwrite(&ctx->record_list->hdr, sizeof(ctx->record_list->hdr), 1, f);
 	fwrite(ctx->record_list->data,
 	       sizeof(struct record),
 	       ctx->record_list->hdr.used,
 	       f);
-
-	fclose(f);
 	return 0;
 }
 
-int rd_load(dv_ctx_t *ctx, const char *path)
+int rd_read(dv_ctx_t *ctx, FILE *f)
 {
-	FILE *f = fopen(path, "rb");
-	if (!f)
+	RecordListHeader hdr;
+	if (fread(&hdr, sizeof(hdr), 1, f) != 1)
 		return -1;
 
-	uint32_t magic;
-	uint8_t version;
-	fread(&magic, sizeof(magic), 1, f);
-	fread(&version, sizeof(version), 1, f);
+	struct record *data = malloc(sizeof(struct record) * hdr.capacity);
+	if (!data)
+		return -1;
 
-	if (magic != RD_MAGIC) {
-		fprintf(stderr, "rd_load: bad magic number\n");
-		fclose(f);
+	if (fread(data, sizeof(struct record), hdr.used, f) != hdr.used) {
+		free(data);
 		return -1;
 	}
-
-	uint16_t capacity;
-	uint16_t used;
-	fread(&capacity, sizeof(capacity), 1, f);
-	fread(&used, sizeof(used), 1, f);
-
-	struct record *data = malloc(sizeof(struct record) * capacity);
-	if (!data) {
-		fclose(f);
-		return -1;
-	}
-
-	fread(data, sizeof(struct record), used, f);
 
 	free(ctx->record_list->data);
 	ctx->record_list->data = data;
-	ctx->record_list->hdr.capacity = capacity;
-	ctx->record_list->hdr.used = used;
+	ctx->record_list->hdr = hdr;
 
-	fclose(f);
 	return 0;
 }
 
@@ -213,7 +210,8 @@ uint16_t *rd_search_records_by_name(dv_ctx_t *ctx,
 		return NULL;
 	}
 
-	uint16_t *results = malloc(sizeof(uint16_t) * ctx->record_list->hdr.used);
+	uint16_t *results =
+	    malloc(sizeof(uint16_t) * ctx->record_list->hdr.used);
 	if (!results) {
 		regfree(&re);
 		*out_count = 0;
@@ -222,7 +220,8 @@ uint16_t *rd_search_records_by_name(dv_ctx_t *ctx,
 
 	uint16_t count = 0;
 	for (uint16_t i = 0; i < ctx->record_list->hdr.used; i++) {
-		if (regexec(&re, ctx->record_list->data[i].name, 0, NULL, 0) == 0)
+		if (regexec(&re, ctx->record_list->data[i].name, 0, NULL, 0) ==
+		    0)
 			results[count++] = ctx->record_list->data[i].id;
 	}
 
@@ -248,7 +247,8 @@ uint16_t *rd_search_records_in_set(dv_ctx_t *ctx,
 		if (ids[i] < MAX_RECORDS)
 			wanted[ids[i]] = true;
 
-	uint16_t *results = malloc(sizeof(uint16_t) * ctx->record_list->hdr.used);
+	uint16_t *results =
+	    malloc(sizeof(uint16_t) * ctx->record_list->hdr.used);
 	if (!results) {
 		regfree(&re);
 		*out_count = 0;
@@ -259,7 +259,8 @@ uint16_t *rd_search_records_in_set(dv_ctx_t *ctx,
 	for (uint16_t i = 0; i < ctx->record_list->hdr.used; i++) {
 		uint16_t rid = ctx->record_list->data[i].id;
 		if (rid < MAX_RECORDS && wanted[rid] &&
-		    regexec(&re, ctx->record_list->data[i].name, 0, NULL, 0) == 0)
+		    regexec(&re, ctx->record_list->data[i].name, 0, NULL, 0) ==
+			0)
 			results[count++] = rid;
 	}
 
@@ -274,6 +275,15 @@ bool rd_record_has_tags(dv_ctx_t *ctx, uint16_t record_id)
 	for (uint16_t i = 0; i < tl->hdr.used; i++) {
 		if (tm_has_tag(ctx, record_id, tl->data[i].id))
 			return true;
+	}
+	return false;
+}
+
+bool rd_is_record_list_empty(dv_ctx_t *ctx)
+{
+	if (ctx->record_list->hdr.used == 0) {
+		ctx->error_status = ERR_EMPTY_RECORD_LIST;
+		return true;
 	}
 	return false;
 }

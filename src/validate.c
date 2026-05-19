@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -6,8 +7,8 @@
 #include <curl/curl.h>
 #include <readline/readline.h>
 #include "validate.h"
+#include "devault.h"
 #include "devaultInt.h"
-#include "display.h"
 
 static const char *RESERVED_NAMES[] = {
     "CON", "PRN", "AUX", "NUL", ".", "..", NULL};
@@ -38,15 +39,7 @@ static bool _match_regex(const char *pattern, const char *input)
 	return result == 0;
 }
 
-static void _trim_newline(char *str)
-{
-	size_t len = strlen(str);
-	while (len > 0 && (str[len - 1] == '\n' || str[len - 1] == '\r')) {
-		str[--len] = '\0';
-	}
-}
-
-bool is_valid_url(dv_ctx_t *ctx, const char *input)
+static bool _is_valid_url(dv_ctx_t *ctx, const char *input)
 {
 	size_t len = strlen(input);
 
@@ -93,35 +86,35 @@ bool is_valid_url(dv_ctx_t *ctx, const char *input)
 	return false;
 }
 
-size_t is_valid_path(dv_ctx_t *ctx, const char *input)
+static bool _is_valid_path(dv_ctx_t *ctx, const char *input)
 {
 	size_t len = strlen(input);
 
 	if (!len) {
 		ctx->error_status = ERR_EMPTY_INPUT;
-		return 0;
+		return false;
 	}
 
 	if (len > MAX_PATH_LEN) {
 		ctx->error_status = ERR_EXCEEDS_MAX_LEN;
-		return 0;
+		return false;
 	}
 
 	if (_match_regex(REGEX_PATH_TRAVERSAL, input)) {
 		ctx->error_status = ERR_PATH_TRAVERSAL;
-		return 0;
+		return false;
 	}
 
 	if (!_match_regex(REGEX_PATH_SAFE, input)) {
 		ctx->error_status = ERR_INVALID_CHARS;
-		return 0;
+		return false;
 	}
 
 	ctx->error_status = ERR_NONE;
-	return len;
+	return true;
 }
 
-bool is_valid_filename(dv_ctx_t *ctx, const char *input)
+static bool _is_valid_filename(dv_ctx_t *ctx, const char *input)
 {
 	size_t len = strlen(input);
 
@@ -151,7 +144,7 @@ bool is_valid_filename(dv_ctx_t *ctx, const char *input)
 	return true;
 }
 
-bool is_valid_menu_opt(
+static bool _is_valid_menu_opt(
     dv_ctx_t *ctx, const char *input, int min, int max, int *result)
 {
 	long parsed;
@@ -179,7 +172,7 @@ bool is_valid_menu_opt(
 	return true;
 }
 
-bool is_valid_alphanum_name(dv_ctx_t *ctx, const char *input)
+static bool _is_valid_alphanum_name(dv_ctx_t *ctx, const char *input)
 {
 	size_t len = strlen(input);
 
@@ -207,141 +200,214 @@ bool is_valid_alphanum_name(dv_ctx_t *ctx, const char *input)
 	return true;
 }
 
-void read_url(dv_ctx_t *ctx, char *buffer, size_t max_len)
+static bool _is_valid_bool_opt(dv_ctx_t *ctx, const char *input)
 {
-	bool valid;
+	size_t len = strlen(input);
 
-	do {
-		printf("Enter URL: ");
-		if (fgets(buffer, (int)max_len, stdin) == NULL) {
-			buffer[0] = '\0';
-		}
-		_trim_newline(buffer);
-		valid = is_valid_url(ctx, buffer);
-		if (!valid) {
-			dv_print_error(ctx, TYPE_URL);
-		}
-	} while (!valid);
+	if (len == 0) {
+		ctx->error_status = ERR_EMPTY_INPUT;
+		return false;
+	}
+
+	if (len != 1) {
+		ctx->error_status = ERR_EXCEEDS_MAX_LEN;
+		return false;
+	}
+
+	if (input[0] == 'y' || input[0] == 'Y') {
+		ctx->error_status = ERR_NONE;
+		return true;
+	}
+
+	if (input[0] == 'n' || input[0] == 'N') {
+		ctx->error_status = ERR_NONE;
+		return false;
+	}
+
+	ctx->error_status = ERR_OPTION_OUT_OF_RANGE;
+	return false;
 }
 
-void read_path(dv_ctx_t *ctx, char *buffer, size_t max_len)
+typedef bool (*_validator_fn)(dv_ctx_t *, const char *);
+
+typedef struct {
+	const char *prompt;
+	InputType error_type;
+	_validator_fn validate;
+} _input_field;
+
+static const _input_field _INPUT_FIELDS[] = {
+    [TYPE_URL] = {"Enter URL: ", TYPE_URL, _is_valid_url},
+    [TYPE_PATH] = {"Enter path: ", TYPE_PATH, _is_valid_path},
+    [TYPE_NAME] = {"Enter file name: ", TYPE_NAME, _is_valid_filename},
+    [TYPE_ALPHANAME] = {"Enter name: ",
+			TYPE_ALPHANAME,
+			_is_valid_alphanum_name},
+};
+
+void read_input(dv_ctx_t *ctx, char *out, size_t max_len, InputType type)
 {
-	bool valid;
-
-	do {
-		printf("Enter path: ");
-		if (fgets(buffer, (int)max_len, stdin) == NULL) {
-			buffer[0] = '\0';
+	const _input_field *f = &_INPUT_FIELDS[type];
+	for (;;) {
+		char *line = readline(f->prompt);
+		if (line) {
+			snprintf(out, max_len, "%s", line);
+			free(line);
+		} else {
+			out[0] = '\0';
 		}
-		_trim_newline(buffer);
-		valid = is_valid_path(ctx, buffer);
-		if (!valid) {
-			dv_print_error(ctx, TYPE_PATH);
-		}
-	} while (!valid);
-}
-
-void read_filename(dv_ctx_t *ctx, char *buffer, size_t max_len)
-{
-	bool valid;
-
-	do {
-		printf("Enter file name: ");
-		if (fgets(buffer, (int)max_len, stdin) == NULL) {
-			buffer[0] = '\0';
-		}
-		_trim_newline(buffer);
-		valid = is_valid_filename(ctx, buffer);
-		if (!valid) {
-			dv_print_error(ctx, TYPE_NAME);
-		}
-	} while (!valid);
-}
-
-void read_alphanum_name(dv_ctx_t *ctx, char *buffer, size_t max_len)
-{
-	bool valid;
-
-	do {
-		printf("Enter name: ");
-		if (fgets(buffer, (int)max_len, stdin) == NULL) {
-			buffer[0] = '\0';
-		}
-		_trim_newline(buffer);
-		valid = is_valid_alphanum_name(ctx, buffer);
-		if (!valid) {
-			dv_print_error(ctx, TYPE_ALPHANAME);
-		}
-	} while (!valid);
+		if (f->validate(ctx, out))
+			return;
+		dv_print_error(ctx);
+	}
 }
 
 int read_menu_opt(dv_ctx_t *ctx, int min, int max)
 {
-	char buffer[16];
+	char prompt[64];
+	snprintf(prompt, sizeof(prompt), "Select option (%d-%d): ", min, max);
+
 	bool valid;
 	int result = min;
 
 	do {
-		printf("Select option (%d-%d): ", min, max);
-		if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
-			buffer[0] = '\0';
-		} else if (strchr(buffer, '\n') == NULL) {
-			int c;
-			while ((c = getchar()) != '\n' && c != EOF)
-				;
+		char *line = readline(prompt);
+		if (!line) {
+			ctx->error_status = ERR_EMPTY_INPUT;
+			dv_print_error(ctx);
+			continue;
 		}
-		_trim_newline(buffer);
-		valid = is_valid_menu_opt(ctx, buffer, min, max, &result);
-		if (!valid) {
-			dv_print_error(ctx, TYPE_OPTION);
-		}
+		valid = _is_valid_menu_opt(ctx, line, min, max, &result);
+		if (!valid)
+			dv_print_error(ctx);
+		free(line);
 	} while (!valid);
 
 	return result;
 }
 
-char *read_input(const char *prompt)
+bool read_bool_opt(dv_ctx_t *ctx, const char *prompt)
 {
-	return readline(prompt);
+	for (;;) {
+		char full[256];
+		snprintf(full, sizeof(full), "%s (y/N): ", prompt);
+		char *line = readline(full);
+		if (!line) {
+			ctx->error_status = ERR_EMPTY_INPUT;
+			dv_print_error(ctx);
+			continue;
+		}
+		bool result = _is_valid_bool_opt(ctx, line);
+		free(line);
+		if (ctx->error_status == ERR_NONE)
+			return result;
+		dv_print_error(ctx);
+	}
 }
 
-void read_regex(dv_ctx_t *ctx, char *buffer, size_t max_len)
+void read_pattern(dv_ctx_t *ctx, char *out, size_t max_len)
 {
-	bool valid;
-
-	do {
-		printf("Enter regex pattern: ");
-		if (fgets(buffer, (int)max_len, stdin) == NULL) {
-			buffer[0] = '\0';
-		} else if (strchr(buffer, '\n') == NULL) {
-			int c;
-			while ((c = getchar()) != '\n' && c != EOF)
-				;
-		}
-		_trim_newline(buffer);
-
-		if (buffer[0] == '\0') {
+	for (;;) {
+		char *line = readline("Enter regex pattern: ");
+		if (!line) {
 			ctx->error_status = ERR_EMPTY_INPUT;
-			dv_print_error(ctx, TYPE_APP);
-			valid = false;
+			dv_print_error(ctx);
 			continue;
 		}
 
 		regex_t re;
-		int rc = regcomp(&re, buffer, REG_EXTENDED | REG_NOSUB);
+		int rc = regcomp(&re, line, REG_EXTENDED | REG_NOSUB);
 		if (rc == 0) {
 			regfree(&re);
-			valid = true;
-		} else {
-			char errbuf[256];
-			regerror(rc, &re, errbuf, sizeof(errbuf));
-			regfree(&re);
-
-			display_separator(stderr);
-			fprintf(stderr, "[!] invalid regex: %s\n", errbuf);
-			display_separator(stderr);
-
-			valid = false;
+			strncpy(out, line, max_len - 1);
+			out[max_len - 1] = '\0';
+			free(line);
+			return;
 		}
-	} while (!valid);
+		char errbuf[256];
+		regerror(rc, &re, errbuf, sizeof(errbuf));
+		regfree(&re);
+
+		ctx->error_msg = errbuf;
+		dv_print_error(ctx);
+		ctx->error_msg = NULL;
+		free(line);
+	}
+}
+
+static bool _is_valid_id_list(dv_ctx_t *ctx, const char *input)
+{
+	size_t len = strlen(input);
+
+	if (len == 0) {
+		ctx->error_status = ERR_NONE;
+		return true;
+	}
+
+	if (!_match_regex(REGEX_ID_LIST, input)) {
+		ctx->error_status = ERR_INVALID_ID_LIST;
+		return false;
+	}
+
+	ctx->error_status = ERR_NONE;
+	return true;
+}
+
+uint16_t *read_id_list(dv_ctx_t *ctx, size_t *count, const char *prompt)
+{
+	for (;;) {
+		char *line = readline(prompt);
+		if (!line) {
+			ctx->error_status = ERR_EMPTY_INPUT;
+			dv_print_error(ctx);
+			continue;
+		}
+
+		if (!_is_valid_id_list(ctx, line)) {
+			free(line);
+			dv_print_error(ctx);
+			continue;
+		}
+
+		size_t n = 0;
+		{
+			const char *p = line;
+			char *endptr;
+			while (*p != '\0') {
+				strtoul(p, &endptr, 10);
+				if (endptr == p)
+					break;
+				n++;
+				p = endptr;
+			}
+		}
+
+		uint16_t *out = malloc((n + 1) * sizeof(uint16_t));
+		if (!out) {
+			free(line);
+			ctx->error_status = ERR_INTERNAL;
+			ctx->error_msg = strerror(errno);
+			dv_print_error(ctx);
+			*count = 0;
+			return NULL;
+		}
+
+		{
+			const char *p = line;
+			char *endptr;
+			size_t i = 0;
+			while (*p != '\0') {
+				unsigned long val = strtoul(p, &endptr, 10);
+				if (endptr == p)
+					break;
+				out[i++] = (uint16_t)val;
+				p = endptr;
+			}
+			out[i] = UINT16_MAX;
+			*count = n;
+		}
+
+		free(line);
+		return out;
+	}
 }

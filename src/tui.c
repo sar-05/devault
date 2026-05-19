@@ -1,411 +1,355 @@
-#include <assert.h>
-#include <stdio.h>
+#include <regex.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <readline/readline.h>
+#include "charts.h"
 #include "devault.h"
-#include "devaultInt.h"
-#include "records.h"
-#include "tags.h"
-#include "tagmatrix.h"
-#include "spawn.h"
-#include "validate.h"
 #include "display.h"
-#include "tui.h"
+#include "records.h"
+#include "tagmatrix.h"
+#include "tags.h"
+#include "validate.h"
+#include "spawn.h"
 
-static const struct record *_select_record_by_search(dv_ctx_t *ctx);
+static void _display_menu(void);
+static void _create_record(dv_ctx_t *ctx);
+static void _delete_record(dv_ctx_t *ctx);
+static void _open_record(dv_ctx_t *ctx);
+static void _edit_record_tags(dv_ctx_t *ctx);
+static void _show_tags_graphs(dv_ctx_t *ctx);
 
-void tui_run(dv_ctx_t *ctx)
+static uint16_t *_search_records_interactive(dv_ctx_t *ctx, uint16_t *out_count)
 {
+	fflush(stdout);
 	printf("\033[H\033[2J\033[3J");
-	for (;;) {
-		display_separator(stdout);
-		printf("  devault personal knowledge manager\n");
-		display_separator(stdout);
+	display_separator(stdout);
+	printf("Record search: \n");
+	display_separator(stdout);
+	fflush(stdout);
+	bool has_tags = tg_print_tags(ctx);
+	display_separator(stdout);
 
-		printf("  1. Create record\n");
-		printf("  2. Delete record\n");
-		printf("  3. Tag record\n");
-		printf("  4. Remove tag from record\n");
-		printf("  5. List records\n");
-		printf("  6. List all tags\n");
-		printf("  7. Search records\n");
-		printf("  8. Exit\n");
-		display_separator(stdout);
+	size_t n_tags = 0;
+	uint16_t *tag_ids = NULL;
 
-		int opt = read_menu_opt(ctx, 1, 8);
-		if (opt == 8) {
-			printf("\033[H\033[2J\033[3J");
-			break;
+	if (has_tags) {
+		tag_ids =
+		    read_id_list(ctx, &n_tags, "Enter tag IDs to filter by: ");
+		if (!tag_ids) {
+			*out_count = 0;
+			return NULL;
 		}
-
-		ctx->error_status = ERR_NONE;
-
-		char name[MAX_NAME_LEN];
-		char tag_name[MAX_NAME_LEN];
-		char url[MAX_URL_LEN];
-		uint16_t record_id;
-		uint16_t tag_id;
-
-		switch (opt) {
-		case 1:
-			read_alphanum_name(ctx, name, sizeof(name));
-			read_url(ctx, url, sizeof(url));
-			if (rd_create_record(ctx, name, url))
-				printf("Record '%s' created.\n", name);
-			else
-				ctx->error_status = ERR_RECORD_CREATE_FAILED;
-			break;
-
-		case 2: {
-			if (ctx->record_list->hdr.used == 0) {
-				ctx->error_status = ERR_EMPTY_RECORD_LIST;
-				break;
-			}
-
-			const struct record *r = _select_record_by_search(ctx);
-			if (!r)
-				break;
-
-			char prompt[MAX_NAME_LEN + MAX_URL_LEN + 32];
-			snprintf(prompt, sizeof(prompt),
-				 "Delete '%s' (%s)? (y/N): ", r->name, r->link);
-			char *yn = read_input(prompt);
-			if (!yn)
-				break;
-			int ync = yn[0];
-			free(yn);
-			if (ync != 'y' && ync != 'Y')
-				break;
-
-			rd_delete_record(ctx, r->name);
-			printf("Record '%s' deleted.\n", r->name);
-			break;
-		}
-
-		case 3: {
-			if (ctx->record_list->hdr.used == 0) {
-				ctx->error_status = ERR_EMPTY_RECORD_LIST;
-				break;
-			}
-
-			const struct record *r = _select_record_by_search(ctx);
-			if (!r)
-				break;
-			record_id = r->id;
-
-			char *line;
-			if (ctx->tag_list->hdr.used > 0) {
-				tg_print_tags(ctx);
-				line = read_input(
-				    "Enter tag ID or new tag name: ");
-			} else {
-				line = read_input(
-				    "No tags yet. Enter a new tag name: ");
-			}
-			if (!line || line[0] == '\0') {
-				free(line);
-				break;
-			}
-			strncpy(tag_name, line, sizeof(tag_name) - 1);
-			tag_name[sizeof(tag_name) - 1] = '\0';
-			free(line);
-				break;
-
-			int parsed;
-			if (is_valid_menu_opt(
-				ctx, tag_name, 0, MAX_TAGS - 1, &parsed)) {
-				tag_id = (uint16_t)parsed;
-				if (tg_get_tag_name_by_id(ctx, tag_id) ==
-				    NULL) {
-					ctx->error_status =
-					    ERR_TAG_ID_NOT_FOUND;
-					break;
-				}
-			} else if (ctx->error_status ==
-				   ERR_OPTION_NOT_NUMERIC) {
-				if (!is_valid_alphanum_name(ctx, tag_name))
-					break;
-				tag_id = tg_get_tag_id_by_name(ctx, tag_name);
-				if (tag_id == UINT16_MAX) {
-					if (!tg_create_tag(ctx, tag_name)) {
-						ctx->error_status =
-						    ERR_TAG_CREATE_FAILED;
-						break;
-					}
-					tag_id = tg_get_tag_id_by_name(
-					    ctx, tag_name);
-				}
-			} else {
-				break;
-			}
-
-			tm_set_tag(ctx, record_id, tag_id);
-			printf("Tag '%s' applied to record '%s'.\n",
-			       tag_name,
-			       r->name);
-			break;
-		}
-
-		case 4: {
-			if (ctx->record_list->hdr.used == 0) {
-				ctx->error_status = ERR_EMPTY_RECORD_LIST;
-				break;
-			}
-
-			const struct record *r = _select_record_by_search(ctx);
-			if (!r)
-				break;
-			record_id = r->id;
-
-			if (!rd_record_has_tags(ctx, record_id)) {
-				ctx->error_status = ERR_NO_TAGS_IN_RECORD;
-				break;
-			}
-			if (!tg_print_tags(ctx))
-				break;
-			char *line = read_input("Enter tag ID or name: ");
-			if (!line || line[0] == '\0') {
-				free(line);
-				break;
-			}
-			strncpy(tag_name, line, sizeof(tag_name) - 1);
-			tag_name[sizeof(tag_name) - 1] = '\0';
-			free(line);
-				break;
-			int parsed;
-			if (is_valid_menu_opt(
-				ctx, tag_name, 0, MAX_TAGS - 1, &parsed)) {
-				tag_id = (uint16_t)parsed;
-				if (tg_get_tag_name_by_id(ctx, tag_id) ==
-				    NULL) {
-					ctx->error_status =
-					    ERR_TAG_ID_NOT_FOUND;
-					break;
-				}
-			} else if (ctx->error_status ==
-				   ERR_OPTION_NOT_NUMERIC) {
-				if (!is_valid_alphanum_name(ctx, tag_name))
-					break;
-				tag_id = tg_get_tag_id_by_name(ctx, tag_name);
-				if (tag_id == UINT16_MAX) {
-					ctx->error_status = ERR_TAG_NOT_FOUND;
-					break;
-				}
-			} else {
-				break;
-			}
-			tm_clear_tag(ctx, record_id, tag_id);
-			{
-				const char *tn =
-				    tg_get_tag_name_by_id(ctx, tag_id);
-				assert(tn != NULL);
-				printf("Tag '%s' removed from record '%s'.\n",
-				       tn,
-				       r->name);
-			}
-			break;
-		}
-
-		case 5:
-			if (ctx->record_list->hdr.used == 0) {
-				ctx->error_status = ERR_EMPTY_RECORD_LIST;
-				break;
-			}
-			display_all_records(ctx);
-			break;
-
-		case 6:
-			tg_print_tags(ctx);
-			break;
-
-		case 7: {
-			if (ctx->record_list->hdr.used == 0) {
-				ctx->error_status = ERR_EMPTY_RECORD_LIST;
-				break;
-			}
-
-			if (!tg_print_tags(ctx))
-				break;
-
-			char *line = read_input(
-			    "Enter tag IDs separated by spaces: ");
-			if (!line || line[0] == '\0') {
-				free(line);
-				break;
-			}
-			strncpy(tag_name, line, sizeof(tag_name) - 1);
-			tag_name[sizeof(tag_name) - 1] = '\0';
-			free(line);
-				break;
-
-			uint16_t *tag_ids = NULL;
-			uint16_t n_tag_ids = 0;
-			size_t tag_cap = 5;
-			tag_ids = malloc(tag_cap * sizeof(uint16_t));
-			if (!tag_ids) {
-				ctx->error_status = ERR_INTERNAL;
-				break;
-			}
-
-			bool parse_ok = true;
-			char *tok = strtok(tag_name, " ");
-			while (tok) {
-				char *end;
-				long val = strtol(tok, &end, 10);
-				if (end == tok || val < 0 ||
-				    val > (long)UINT16_MAX) {
-					parse_ok = false;
-					break;
-				}
-				uint16_t tid = (uint16_t)val;
-				if (tg_get_tag_name_by_id(ctx, tid) == NULL) {
-					ctx->error_status =
-					    ERR_TAG_ID_NOT_FOUND;
-					parse_ok = false;
-					break;
-				}
-				if (n_tag_ids >= tag_cap) {
-					tag_cap *= 2;
-					uint16_t *tmp =
-					    realloc(tag_ids,
-						    tag_cap * sizeof(uint16_t));
-					if (!tmp) {
-						ctx->error_status =
-						    ERR_INTERNAL;
-						parse_ok = false;
-						break;
-					}
-					tag_ids = tmp;
-				}
-				tag_ids[n_tag_ids++] = tid;
-				tok = strtok(NULL, " ");
-			}
-
-			if (!parse_ok) {
-				free(tag_ids);
-				if (ctx->error_status == ERR_NONE)
-					ctx->error_status = ERR_TAG_NOT_FOUND;
-				break;
-			}
-
-			if (n_tag_ids == 0) {
-				free(tag_ids);
-				break;
-			}
-
-			uint16_t rec_count;
-			uint16_t *rec_ids =
-			    tm_query(ctx, tag_ids, n_tag_ids, &rec_count);
-			free(tag_ids);
-			if (!rec_ids || rec_count == 0) {
-				free(rec_ids);
-				ctx->error_status = ERR_RECORD_SEARCH_NO_MATCH;
-				break;
-			}
-			char pattern[MAX_NAME_LEN];
-			read_regex(ctx, pattern, sizeof(pattern));
-			uint16_t match_count;
-			uint16_t *match_ids = rd_search_records_in_set(
-			    ctx, pattern, rec_ids, rec_count, &match_count);
-			free(rec_ids);
-			if (!match_ids || match_count == 0) {
-				free(match_ids);
-				ctx->error_status = ERR_RECORD_SEARCH_NO_MATCH;
-				break;
-			}
-			display_record_list(ctx, match_ids, match_count);
-			{
-				char *line =
-			    read_input("Enter record ID from the list: ");
-				if (!line || line[0] == '\0') {
-					free(line);
-					free(match_ids);
-					break;
-				}
-				char *end;
-				long val = strtol(line, &end, 10);
-				free(line);
-				if (*end != '\0' || val < 0 ||
-				    val > (long)UINT16_MAX) {
-					free(match_ids);
-					break;
-				}
-				uint16_t chosen = (uint16_t)val;
-				bool found = false;
-				for (uint16_t i = 0; i < match_count; i++) {
-					if (match_ids[i] == chosen) {
-						found = true;
-						break;
-					}
-				}
-				if (!found) {
-					free(match_ids);
-					break;
-				}
-				display_record_with_tags(ctx, chosen);
-				free(match_ids);
-			}
-			break;
-		}
-
-		default:
-			break;
-		}
-		printf("\033[H\033[2J\033[3J");
-		fflush(stdout);
-		if (ctx->error_status != ERR_NONE)
-			dv_print_error(ctx, TYPE_APP);
+	} else {
+		dv_set_error_status(ctx, ERR_NONE);
 	}
-}
 
-static const struct record *_select_record_by_search(dv_ctx_t *ctx)
-{
-	char pattern[MAX_NAME_LEN];
-	read_regex(ctx, pattern, sizeof(pattern));
+	uint16_t *tag_filtered = NULL;
+	uint16_t n_tag_filtered = 0;
+	if (n_tags > 0) {
+		tag_filtered =
+		    tm_query(ctx, tag_ids, (uint16_t)n_tags, &n_tag_filtered);
+	}
+	free(tag_ids);
 
-	uint16_t count;
-	uint16_t *ids = rd_search_records_by_name(ctx, pattern, &count);
-	if (!ids || count == 0) {
-		free(ids);
-		ctx->error_status = ERR_RECORD_SEARCH_NO_MATCH;
+	char pattern[MAX_REGEX_LEN];
+	read_pattern(ctx, pattern, sizeof(pattern));
+
+	uint16_t *matched = NULL;
+	if (n_tags > 0 && tag_filtered && n_tag_filtered > 0) {
+		matched = rd_search_records_in_set(
+		    ctx, pattern, tag_filtered, n_tag_filtered, out_count);
+	} else if (n_tags > 0) {
+		*out_count = 0;
+	} else {
+		matched = rd_search_records_by_name(ctx, pattern, out_count);
+	}
+	free(tag_filtered);
+
+	if (!matched || *out_count == 0) {
+		free(matched);
+		dv_set_error_status(ctx, ERR_RECORD_SEARCH_NO_MATCH);
 		return NULL;
 	}
 
-	if (count == 1) {
-		uint16_t id = ids[0];
-		free(ids);
-		return rd_get_record_by_id(ctx, id);
+	display_records_by_id(ctx, matched, *out_count);
+	return matched;
+}
+
+static void _display_menu(void)
+{
+	printf("\033[H\033[2J\033[3J");
+	fflush(stdout);
+
+	display_separator(stdout);
+	printf("  devault personal knowledge manager\n");
+	display_separator(stdout);
+
+	printf("  1. Create record\n");
+	printf("  2. Delete record\n");
+	printf("  3. Open record\n");
+	printf("  4. Edit record tags\n");
+	printf("  5. Show tags graphs\n");
+	printf("  6. Exit\n");
+	display_separator(stdout);
+}
+
+static void _create_record(dv_ctx_t *ctx)
+{
+	char name[MAX_NAME_LEN];
+	char link[MAX_URL_LEN];
+
+	read_input(ctx, name, sizeof(name), TYPE_ALPHANAME);
+	if (dv_get_error_status(ctx) != ERR_NONE)
+		return;
+
+	read_input(ctx, link, sizeof(link), TYPE_URL);
+	if (dv_get_error_status(ctx) != ERR_NONE)
+		return;
+
+	if (!rd_create_record(ctx, name, link))
+		return;
+
+	dv_save(ctx);
+	dv_set_success_msg(ctx, "Record created successfully");
+}
+
+static void _delete_record(dv_ctx_t *ctx)
+{
+	uint16_t count;
+	uint16_t *matched = _search_records_interactive(ctx, &count);
+	if (!matched)
+		return;
+
+	size_t n_sel;
+	uint16_t *sel =
+	    read_id_list(ctx, &n_sel, "Enter record IDs to delete: ");
+	if (!sel) {
+		free(matched);
+		return;
 	}
 
-	display_record_list(ctx, ids, count);
+	for (size_t i = 0; i < n_sel; i++)
+		rd_delete_record_by_id(ctx, sel[i]);
 
-	for (;;) {
-		char *line = read_input("Enter record ID from the list: ");
-		if (!line)
-			break;
-		if (line[0] == '\0') {
-			free(line);
-			break;
-		}
+	free(sel);
+	free(matched);
 
-		char *end;
-		long val = strtol(line, &end, 10);
-		free(line);
-		if (*end != '\0' || val < 0 || val > (long)UINT16_MAX) {
-			fprintf(stderr, "[!] invalid input.\n");
-			continue;
-		}
+	dv_save(ctx);
+	dv_set_success_msg(ctx, "Record(s) deleted successfully");
+}
 
-		uint16_t chosen = (uint16_t)val;
-		for (uint16_t i = 0; i < count; i++) {
-			if (ids[i] == chosen) {
-				free(ids);
-				return rd_get_record_by_id(ctx, chosen);
+static void _open_record(dv_ctx_t *ctx)
+{
+	uint16_t count;
+	uint16_t *matched = _search_records_interactive(ctx, &count);
+	if (!matched)
+		return;
+
+	size_t n_sel;
+	uint16_t *sel = read_id_list(ctx, &n_sel, "Enter record IDs to open: ");
+	if (!sel) {
+		free(matched);
+		return;
+	}
+
+	for (size_t i = 0; i < n_sel; i++) {
+		uint16_t id = sel[i];
+		for (;;) {
+			fflush(stdout);
+			printf("\033[H\033[2J\033[3J");
+			display_separator(stdout);
+			display_record_by_id(ctx, id);
+			display_separator(stdout);
+			printf("  1. Open in editor\n");
+			printf("  2. Open link in browser\n");
+			printf("  3. Exit\n");
+			display_separator(stdout);
+
+			int opt = read_menu_opt(ctx, 1, 3);
+			if (opt == 3)
+				break;
+
+			const struct record *r = rd_get_record_by_id(ctx, id);
+			if (!r)
+				break;
+
+			switch (opt) {
+			case 1: {
+				char path[MAX_PATH_LEN];
+				snprintf(path,
+					 sizeof(path),
+					 "%s/%s",
+					 dv_get_save_path(ctx),
+					 r->name);
+				fork_to_editor(path);
+				break;
+			}
+			case 2:
+				fork_to_xdg_open(r->link);
+				break;
 			}
 		}
-		fprintf(stderr, "[!] ID %u is not in the list.\n", chosen);
 	}
 
+	free(sel);
+	free(matched);
+
+	dv_set_success_msg(ctx, "Record(s) opened successfully");
+}
+
+static void _edit_record_add_tags(dv_ctx_t *ctx, uint16_t record_id)
+{
+	printf("Available tags:\n");
+	display_all_tags(ctx);
+	display_separator(stdout);
+
+	char *line = readline("Enter tag IDs or names: ");
+	if (!line)
+		return;
+
+	char *tok = strtok(line, " ");
+	while (tok) {
+		char *end = NULL;
+		unsigned long val = strtoul(tok, &end, 10);
+		if (end > tok && *end == '\0') {
+			uint16_t tag_id = (uint16_t)val;
+			if (tg_get_tag_name_by_id(ctx, tag_id))
+				tm_set_tag(ctx, record_id, tag_id);
+		} else {
+			uint16_t tag_id = tg_get_tag_id_by_name(ctx, tok);
+			if (tag_id == UINT16_MAX) {
+				tg_create_tag(ctx, tok);
+				tag_id = tg_get_tag_id_by_name(ctx, tok);
+			}
+			if (tag_id != UINT16_MAX)
+				tm_set_tag(ctx, record_id, tag_id);
+		}
+		tok = strtok(NULL, " ");
+	}
+	free(line);
+}
+
+static void _edit_record_remove_tags(dv_ctx_t *ctx, uint16_t record_id)
+{
+	printf("Tags of current record:\n");
+	display_record_tags(ctx, record_id);
+	display_separator(stdout);
+
+	size_t n_ids;
+	uint16_t *ids = read_id_list(ctx, &n_ids, "Enter tag IDs to remove: ");
+	if (!ids)
+		return;
+
+	for (size_t i = 0; i < n_ids; i++)
+		tm_clear_tag(ctx, record_id, ids[i]);
+
 	free(ids);
-	return NULL;
+}
+
+static void _edit_record_tags(dv_ctx_t *ctx)
+{
+	uint16_t count;
+	uint16_t *matched = _search_records_interactive(ctx, &count);
+	if (!matched)
+		return;
+
+	size_t n_sel;
+	uint16_t *sel = read_id_list(ctx, &n_sel, "Enter record IDs to edit: ");
+	if (!sel) {
+		free(matched);
+		return;
+	}
+
+	for (size_t i = 0; i < n_sel; i++) {
+		uint16_t id = sel[i];
+		for (;;) {
+			display_record_by_id(ctx, id);
+			display_separator(stdout);
+			printf("  1. Add tags\n");
+			printf("  2. Remove tags\n");
+			printf("  3. Done\n");
+			display_separator(stdout);
+
+			int opt = read_menu_opt(ctx, 1, 3);
+			if (opt == 1)
+				_edit_record_add_tags(ctx, id);
+			else if (opt == 2)
+				_edit_record_remove_tags(ctx, id);
+			else
+				break;
+		}
+	}
+
+	free(sel);
+	free(matched);
+
+	dv_save(ctx);
+	dv_set_success_msg(ctx, "Record tags updated successfully");
+}
+
+static void _show_tags_graphs(dv_ctx_t *ctx)
+{
+	printf("\033[H\033[2J\033[3J");
+	fflush(stdout);
+	display_separator(stdout);
+	printf("  TAG STATISTICS CHARTS\n");
+	display_separator(stdout);
+	printf("  1. Pie chart\n");
+	printf("  2. Bar chart\n");
+	printf("  3. Exit\n");
+	display_separator(stdout);
+
+	int opt = read_menu_opt(ctx, 1, 3);
+	if (opt == 3) {
+		dv_set_success_msg(ctx, "Cancelled");
+		return;
+	}
+
+	if (opt == 1)
+		pipe_to_pager(display_pie_chart, ctx);
+	else
+		pipe_to_pager(display_bar_chart, ctx);
+
+	dv_set_success_msg(ctx, "Chart displayed in pager");
+}
+
+void tui_run(dv_ctx_t *ctx)
+{
+	_display_menu();
+
+	for (;;) {
+		int opt = read_menu_opt(ctx, 1, 6);
+
+		if (opt == 6)
+			break;
+
+		switch (opt) {
+		case 1:
+			_create_record(ctx);
+			break;
+		case 2:
+			_delete_record(ctx);
+			break;
+		case 3:
+			_open_record(ctx);
+			break;
+		case 4:
+			_edit_record_tags(ctx);
+			break;
+		case 5:
+			_show_tags_graphs(ctx);
+			break;
+		default:
+			dv_set_error_status(ctx, ERR_OPTION_OUT_OF_RANGE);
+		}
+
+		_display_menu();
+
+		dv_error e;
+		if ((e = dv_get_error_status(ctx)) != ERR_NONE)
+			dv_print_error(ctx);
+		else
+			dv_print_success(ctx);
+	}
 }

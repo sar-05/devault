@@ -73,3 +73,32 @@ void print_pie_chart(int *arreglo, char **nombres, int longitud)
 		     << "%" << endl;
 	}
 }
+
+void print_bar_chart(int *arreglo_enteros,
+		     char **nombres,
+		     int longitud_del_arreglo)
+{
+	double total = std::accumulate(
+	    arreglo_enteros, arreglo_enteros + longitud_del_arreglo, 0.0);
+	if (total <= 0)
+		return;
+
+	const char *colores_fondo[] = {
+	    ROJO, VERDE, AMARILLO, AZUL, MAGENTA, CIAN};
+
+	cout << "\n--- REPORTE VISUAL CON RELLENO ---\n" << endl;
+
+	for (int i = 0; i < longitud_del_arreglo; i++) {
+		float porcentaje = (arreglo_enteros[i] / total) * 100.0;
+
+		cout << left << setw(15) << nombres[i] << " [" << fixed
+		     << setprecision(1) << porcentaje << "%] ";
+
+		// Cada bloque son dos espacios para que se vea "gordita" la barra
+		cout << colores_fondo[i % 6];
+		int num_bloques = (int)(porcentaje / 2);
+		for (int j = 0; j < num_bloques; j++)
+			cout << "  ";
+		cout << RESET << endl;
+	}
+}

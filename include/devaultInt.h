@@ -9,14 +9,13 @@
 #include "validate.h"
 
 typedef struct _tag_matrix_header {
-	uint32_t magic;
 	uint16_t m_capacity;
 	uint16_t n_capacity;
 	uint16_t m_used;
 	uint16_t n_used;
 	uint16_t fl_head;
-	uint8_t version;
 	uint8_t fl_tag_count;
+	uint8_t _pad;
 } TagMatrixHeader;
 
 struct _tagmatrix {
@@ -29,7 +28,6 @@ struct _tagmatrix {
 };
 
 typedef struct _tag_list_header {
-	uint32_t magic;
 	uint16_t capacity;
 	uint16_t used;
 } TagListHeader;
@@ -40,7 +38,6 @@ struct _tag_list {
 };
 
 typedef struct _record_list_header {
-	uint32_t magic;
 	uint16_t capacity;
 	uint16_t used;
 } RecordListHeader;
@@ -55,6 +52,9 @@ struct _dv_ctx {
 	TagList *tag_list;
 	RecordList *record_list;
 	dv_error error_status;
+	const char *success_msg;
+	const char *error_msg;
+	char *save_path;
 };
 
 #endif

@@ -1,4 +1,6 @@
+#include "devault.h"
 #define _POSIX_C_SOURCE 200809L
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,19 +56,67 @@ bool fork_to_editor(const char *path)
 	return false;
 }
 
+bool fork_to_xdg_open(const char *url)
+{
+	pid_t child = fork();
+
+	if (child < 0) {
+		perror("fork");
+		return false;
+	}
+
+	if (child == 0) {
+		pid_t grandchild = fork();
+
+		if (grandchild < 0)
+			_exit(1);
+
+		if (grandchild == 0) {
+			int fd = open("/dev/null", O_WRONLY);
+			if (fd != -1) {
+				dup2(fd, STDOUT_FILENO);
+				dup2(fd, STDERR_FILENO);
+				close(fd);
+			}
+			char *args[] = {"xdg-open", (char *)url, NULL};
+			execvp("xdg-open", args);
+			_exit(1);
+		}
+
+		_exit(0);
+	}
+
+	int status;
+	if (waitpid(child, &status, 0) == -1) {
+		perror("waitpid");
+		return false;
+	}
+
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 /* Opens path thorugh the system pager (defaults to less). */
 bool fork_to_pager(const char *path)
 {
 	const char *pager = getenv("PAGER");
-	if (!pager)
+	bool use_less_raw = false;
+	if (!pager) {
 		pager = "less";
+		use_less_raw = true;
+	}
 	pid_t pid = fork();
 	if (pid < 0) {
 		perror("fork");
 		return false;
 	}
 	if (pid == 0) {
-		char *args[] = {(char *)pager, (char *)path, NULL};
+		char *args[4];
+		int ai = 0;
+		args[ai++] = (char *)pager;
+		if (use_less_raw)
+			args[ai++] = (char *)"-R";
+		args[ai++] = (char *)path;
+		args[ai] = NULL;
 		execvp(pager, args);
 		perror("execvp");
 		exit(1);
@@ -77,9 +127,9 @@ bool fork_to_pager(const char *path)
 		return false;
 	}
 	if (WIFEXITED(status)) {
-		fprintf(stderr,
+		/* fprintf(stderr,
 			"Pager exited normally with code %d\n",
-			WEXITSTATUS(status));
+			WEXITSTATUS(status)); */
 		return true;
 	} else if (WIFSIGNALED(status)) {
 		fprintf(stderr,
@@ -93,7 +143,7 @@ bool fork_to_pager(const char *path)
 }
 
 /* Pipes output of writer function to the system pager (defaults to less). */
-bool pipe_to_pager(void (*writer)(void *ctx), void *ctx)
+bool pipe_to_pager(void (*writer)(dv_ctx_t *ctx), dv_ctx_t *ctx)
 {
 	int saved_stdout = dup(STDOUT_FILENO);
 	if (saved_stdout == -1) {
@@ -109,8 +159,11 @@ bool pipe_to_pager(void (*writer)(void *ctx), void *ctx)
 	}
 
 	const char *pager = getenv("PAGER");
-	if (!pager)
+	bool use_less_raw = false;
+	if (!pager) {
 		pager = "less";
+		use_less_raw = true;
+	}
 
 	pid_t pid = fork();
 	if (pid < 0) {
@@ -128,7 +181,12 @@ bool pipe_to_pager(void (*writer)(void *ctx), void *ctx)
 			exit(1);
 		}
 		close(pipefd[0]);
-		char *args[] = {(char *)pager, NULL};
+		char *args[4];
+		int ai = 0;
+		args[ai++] = (char *)pager;
+		if (use_less_raw)
+			args[ai++] = (char *)"-R";
+		args[ai] = NULL;
 		close(saved_stdout);
 		execvp(pager, args);
 

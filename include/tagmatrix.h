@@ -2,6 +2,7 @@
 #define TAGMATRIX_H
 
 #include <stdint.h>
+#include <stdio.h>
 #include "devault.h"
 
 typedef struct _tagmatrix TagMatrix;
@@ -10,9 +11,9 @@ int tm_create(dv_ctx_t *ctx, uint16_t m_capacity, uint16_t n_capacity);
 
 void tm_free(dv_ctx_t *ctx);
 
-int tm_save(dv_ctx_t *ctx, const char *path);
+int tm_write(dv_ctx_t *ctx, FILE *f);
 
-int tm_load(dv_ctx_t *ctx, const char *path);
+int tm_read(dv_ctx_t *ctx, FILE *f);
 
 void tm_delete_record(dv_ctx_t *ctx, int R);
 
